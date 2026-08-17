@@ -148,10 +148,19 @@ test("overlens crawl", async ({ context }) => {
       await target.route(pattern, (route) => route.abort());
   };
 
+  // Login runs on a pristine page, as a person would: the determinism
+  // treatments exist for screenshots, and freezing the clock during a live
+  // login makes freshly issued tokens look like they're from the future —
+  // OIDC iat/nbf validation then rejects the session. Cookies and
+  // localStorage live on the context, so the session survives the close.
+  if (overlens.auth) {
+    const login = await context.newPage();
+    await overlens.auth(login);
+    await login.close();
+  }
+
   let page = await context.newPage();
   await preparePage(page);
-
-  await overlens.auth?.(page);
 
   const first = new URL(overlens.firstPageToVisit);
   const firstPath = first.pathname.replace(/\/$/, "") || "/";
