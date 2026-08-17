@@ -229,38 +229,6 @@ jobs:
           TOTAL=$(grep -c . /tmp/sitemap-pages.txt)
           PCT=$(awk -v c="$CHANGED" -v t="$TOTAL" 'BEGIN{s=sprintf("%.1f", c*100/t); sub(/\.0$/, "", s); printf "%s%%", s}')
           LENS="${INSPECTOR}/${GITHUB_REPOSITORY}/pull/${PR}"
-          VPR=$(gh pr list --head "overlens/$SLUG" --state open --json url -q '.[0].url')
-          if [ -z "$VPR" ] && [ "$CHANGED" -gt 0 ] && [ "$CREATE_PR" != "false" ] && [ -n "$DEV_EXISTS" ]; then
-            VPR=$(gh pr create --draft --base overlens/dev --head "overlens/$SLUG" \
-              --title "🎭 Overlens" --body "Overlens is preparing the report…") || VPR=""
-          fi
-          {
-            echo "## Summary by Overlens"
-            echo
-            if [ "$CHANGED" -gt 0 ]; then
-              printf '🎭 Visual differences detected — %s of all pages have diffs. ' "$PCT"
-              if [ -n "$VPR" ]; then printf '[PR was filed](%s) · ' "$VPR"; fi
-              echo "[View on Overlens]($LENS)"
-            else
-              echo "✅ No visual differences. [View on Overlens]($LENS)"
-            fi
-          } > /tmp/summary.md
-          gh pr view "$PR" --json body -q .body > /tmp/src-body.md
-          awk '/<!-- overlens:summary -->/{skip=1} { if (!skip) print } /<!-- \/overlens:summary -->/{skip=0}' /tmp/src-body.md \
-            | perl -0pe 's/\s+\z//' > /tmp/src-body-stripped.md
-          {
-            if [ -s /tmp/src-body-stripped.md ]; then
-              cat /tmp/src-body-stripped.md
-              echo
-              echo
-            fi
-            echo '<!-- overlens:summary -->'
-            cat /tmp/summary.md
-            echo '<!-- /overlens:summary -->'
-          } > /tmp/src-body-new.md
-          gh pr edit "$PR" --body-file /tmp/src-body-new.md
-          [ -n "$VPR" ] || exit 0
-          VNUM="${VPR##*/}"
           SRC_TITLE=$(gh pr view "$PR" --json title -q .title)
           if [ "$CHANGED" = "0" ]; then
             SUFFIX="✅ Clean"
@@ -285,8 +253,11 @@ jobs:
                 D*) label="removed" ;;
                 *) label=$(awk -v f="$f" '$1==f{print $2}' /tmp/diff-stats.txt) ;;
               esac
+              # The compare page carries the same per-file anchors as the PR's
+              # own files view — which is what lets the report be authored
+              # before the PR exists.
               anchor=$(printf '%s' "$f" | sha256sum | cut -d' ' -f1)
-              echo "[$f](https://github.com/${GITHUB_REPOSITORY}/pull/$VNUM/changes#diff-$anchor) (${label:-changed})"
+              echo "[$f](https://github.com/${GITHUB_REPOSITORY}/compare/overlens/dev...overlens/$SLUG#diff-$anchor) (${label:-changed})"
             done < /tmp/staged.txt
           } > /tmp/body.md
           {
@@ -321,7 +292,41 @@ jobs:
             ' /tmp/sitemap-pages.txt
             echo '```'
           } >> /tmp/body.md
-          gh pr edit "$VNUM" --title "🎭 Overlens ($SUFFIX) [$SRC_TITLE]" --body-file /tmp/body.md
+          TITLE="🎭 Overlens ($SUFFIX) [$SRC_TITLE]"
+          VPR=$(gh pr list --head "overlens/$SLUG" --state open --json url -q '.[0].url')
+          if [ -n "$VPR" ]; then
+            gh pr edit "${VPR##*/}" --title "$TITLE" --body-file /tmp/body.md
+          elif [ "$CHANGED" -gt 0 ] && [ "$CREATE_PR" != "false" ] && [ -n "$DEV_EXISTS" ]; then
+            # Born with its final report — a failure later in this step can
+            # never leave a half-made placeholder PR behind.
+            VPR=$(gh pr create --draft --base overlens/dev --head "overlens/$SLUG" \
+              --title "$TITLE" --body-file /tmp/body.md) || VPR=""
+          fi
+          {
+            echo "## Summary by Overlens"
+            echo
+            if [ "$CHANGED" -gt 0 ]; then
+              printf '🎭 Visual differences detected — %s of all pages have diffs. ' "$PCT"
+              if [ -n "$VPR" ]; then printf '[PR was filed](%s) · ' "$VPR"; fi
+              echo "[View on Overlens]($LENS)"
+            else
+              echo "✅ No visual differences. [View on Overlens]($LENS)"
+            fi
+          } > /tmp/summary.md
+          gh pr view "$PR" --json body -q .body > /tmp/src-body.md
+          awk '/<!-- overlens:summary -->/{skip=1} { if (!skip) print } /<!-- \/overlens:summary -->/{skip=0}' /tmp/src-body.md \
+            | perl -0pe 's/\s+\z//' > /tmp/src-body-stripped.md
+          {
+            if [ -s /tmp/src-body-stripped.md ]; then
+              cat /tmp/src-body-stripped.md
+              echo
+              echo
+            fi
+            echo '<!-- overlens:summary -->'
+            cat /tmp/summary.md
+            echo '<!-- /overlens:summary -->'
+          } > /tmp/src-body-new.md
+          gh pr edit "$PR" --body-file /tmp/src-body-new.md
 
   cleanup:
     name: Cleanup PR
