@@ -30,12 +30,14 @@ const clock = (page: Page, timestamp: number) =>
   Date.now = () => __DateNow() + __DateNowOffset;
 }`);
 
-const tokens = [
-  ...new Set([
-    new URL(overlens.firstPageToVisit).host,
-    new URL(process.env.PLAYWRIGHT_BASE_URL ?? overlens.firstPageToVisit).host,
-  ]),
-]
+const base = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+// Entries resolve against the deploy URL, so both plain paths ("/") and
+// absolute URLs (a vendor subdomain) work.
+const entries = (overlens.pagesIncluded ?? ["/"]).map((p) => new URL(p, base));
+const excluded = (path: string) =>
+  overlens.pagesExcluded?.some((p) => path === p || path.startsWith(`${p}/`));
+
+const tokens = [...new Set([...entries.map((u) => u.host), new URL(base).host])]
   .sort((a, b) => b.length - a.length)
   .map((host): [string, string] => [host, "overlens.app"]);
 
@@ -162,16 +164,20 @@ test("overlens crawl", async ({ context }) => {
   let page = await context.newPage();
   await preparePage(page);
 
-  const first = new URL(overlens.firstPageToVisit);
-  const firstPath = first.pathname.replace(/\/$/, "") || "/";
+  // Entry pages keep their full href (query and all); every other page is
+  // origin + path.
+  const entryOf = new Map(
+    entries.map((u) => [u.pathname.replace(/\/$/, "") || "/", u.href]),
+  );
   const seen = new Set<string>();
-  const queue = [firstPath];
+  const queue = [...entryOf.keys()];
   const pages: string[] = [];
 
   while (queue.length) {
     const path = queue.shift()!.replace(/\/$/, "") || "/";
     if (seen.has(path)) continue;
     seen.add(path);
+    if (excluded(path)) continue;
     const pathShape = shape(path);
     // `shape` declares these paths to be the same page, so a second instance
     // has nothing to add: same screenshot, same links. Collapsing them is the
@@ -182,13 +188,10 @@ test("overlens crawl", async ({ context }) => {
 
     try {
       await withDeadline(async () => {
-        await page.goto(
-          path === firstPath ? first.href : `${first.origin}${path}`,
-          {
-            waitUntil: "networkidle",
-            timeout: 30000,
-          },
-        );
+        await page.goto(entryOf.get(path) ?? `${entries[0].origin}${path}`, {
+          waitUntil: "networkidle",
+          timeout: 30000,
+        });
         await overlens.ready?.(page);
 
         await page.evaluate(() => document.fonts.ready);
