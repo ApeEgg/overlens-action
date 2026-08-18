@@ -56,10 +56,22 @@ jobs:
         if: steps.gate.outputs.go
         with:
           persist-credentials: false
+      # A commit from before the config landed (or after it was removed) has
+      # nothing to crawl — deploys of such branches skip the same way a
+      # non-matching environment does, instead of failing on the import.
+      - name: Check for config
+        id: config
+        if: steps.gate.outputs.go
+        run: |
+          if [ -f overlens.config.ts ] || [ -f overlens.config.js ]; then
+            echo "present=1" >> $GITHUB_OUTPUT
+          else
+            echo "No overlens.config at this commit — nothing to crawl."
+          fi
       # The crawl engine rides with this workflow: job.workflow_sha is the
       # ref the caller pinned, so a consumer on a tag gets that tag's engine.
       - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4
-        if: steps.gate.outputs.go
+        if: steps.config.outputs.present
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -67,13 +79,13 @@ jobs:
           sparse-checkout: crawler
           persist-credentials: false
       # The playwright image lacks unzip, which setup-bun needs.
-      - if: steps.gate.outputs.go
+      - if: steps.config.outputs.present
         run: apt-get update && apt-get install -y unzip
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: steps.gate.outputs.go
+        if: steps.config.outputs.present
       - name: Read config flags
         id: flags
-        if: steps.gate.outputs.go
+        if: steps.config.outputs.present
         # The config may derive values from the deploy URL at import time, so
         # it gets the same env the crawl runs under. Bun imports it straight
         # from source with no install — the config stays dependency-free.
@@ -85,15 +97,15 @@ jobs:
           case "$TARGET" in ''|undefined) echo "overlens.config must set targetBranch" >&2; exit 1;; esac
           echo "targetBranch=$TARGET" >> $GITHUB_OUTPUT
           echo "createPR=$(bun -e 'console.log((((await import("./overlens.config")).default.createPR ?? true) ? "true" : "false"))')" >> $GITHUB_OUTPUT
-      - if: steps.gate.outputs.go
+      - if: steps.config.outputs.present
         run: bun install --cwd .overlens/crawler
-      - if: steps.gate.outputs.go
+      - if: steps.config.outputs.present
         working-directory: .overlens/crawler
         run: OVERLENS=1 bunx playwright test overlens.spec
         env:
           PLAYWRIGHT_BASE_URL: ${{ github.event.deployment_status.target_url }}
       - uses: actions/upload-artifact@v4
-        if: always() && steps.gate.outputs.go
+        if: always() && steps.config.outputs.present
         with:
           name: overlens-output
           path: .overlens/crawler/overlens-output/
