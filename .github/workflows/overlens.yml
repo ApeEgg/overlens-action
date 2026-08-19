@@ -80,7 +80,9 @@ jobs:
           persist-credentials: false
       # The playwright image lacks unzip, which setup-bun needs.
       - if: steps.config.outputs.present
-        run: apt-get update && apt-get install -y unzip
+        run: |
+          apt-get -o Acquire::Retries=3 update \
+            && apt-get install -y --no-install-recommends -o Acquire::Retries=3 unzip
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: steps.config.outputs.present
       - name: Read config flags
@@ -129,10 +131,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # The hosted image usually ships both; a cold apt run here has eaten
-      # 9+ minutes of mirror roulette, so only install what's missing.
+      # 9+ minutes of mirror roulette — once a full 20-minute job timeout —
+      # so only install what's missing, skip imagemagick's recommends
+      # (ghostscript, fonts — most of the download, unused by `compare`) and
+      # retry past flaky mirrors.
       - run: |
           command -v compare >/dev/null && command -v jq >/dev/null \
-            || (sudo apt-get update && sudo apt-get install -y imagemagick jq)
+            || (sudo apt-get -o Acquire::Retries=3 update \
+              && sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 imagemagick jq)
       - name: Resolve slug
         run: |
           # A deploy can land after a newer push — name-rev then answers
