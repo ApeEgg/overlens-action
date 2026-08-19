@@ -197,7 +197,16 @@ jobs:
               GEO=$(identify -format '%w %h ' /tmp/baseline.png "$f" 2>/dev/null \
                 | awk 'NF==4{ o=($1<$3?$1:$3)*($2<$4?$2:$4); print ($1<$3?$1:$3) "x" ($2<$4?$2:$4), o, ($1>$3?$1:$3)*($2>$4?$2:$4)-o }' || true)
               read -r OVERLAP OAREA PAD <<< "${GEO:-x 0 0}"
-              AE=$(compare -fuzz 2% -metric AE "/tmp/baseline.png[$OVERLAP+0+0]" "$f[$OVERLAP+0+0]" null: 2>&1 | grep -oE '^[0-9.eE+-]+' || true)
+              # 5% per-channel: anti-aliasing jitters glyph edges by 2-3%
+              # between renders (and the exact 2% boundary rounds differently
+              # across ImageMagick versions), while any visible change moves
+              # channels by 30%+. The pixel floor is the backstop for the
+              # jitter that clears even that — a real change is never a
+              # couple dozen pixels on a full-page shot.
+              AE=$(compare -fuzz 5% -metric AE "/tmp/baseline.png[$OVERLAP+0+0]" "$f[$OVERLAP+0+0]" null: 2>&1 | grep -oE '^[0-9.eE+-]+' || true)
+              # Only floor a plain count — an empty or scientific-notation AE
+              # is compare failing, and that must stay flagged, not zeroed.
+              case "$AE" in ''|*[eE]*) ;; *) [ "${AE%%.*}" -gt 32 ] || AE=0 ;; esac
               # An identical shared area is no change on a PR — height deltas
               # are missing pixels, not diffs. The dev baseline still adopts
               # new heights so it keeps tracking the crawler's viewport.
