@@ -13,6 +13,7 @@ const shape =
   overlens.shape ??
   ((path: string) => path.replace(/\/(?=[^/]*\d)[^/]{8,}/g, "/[id]"));
 const mask = overlens.mask ?? ["[data-apply-playwright-mask]"];
+type Pass = (typeof overlens.passes)[number];
 
 const clock = (page: Page, timestamp: number) =>
   page.addInitScript(`{
@@ -68,9 +69,12 @@ const normalize = (page: Page) =>
 // A page is ready to screenshot when it has stopped changing, not when the
 // network went idle at goto time: state arriving over a websocket mounts
 // content long after networkidle, and those mounts fire fresh component
-// fetches goto never saw. Quiescence is observed directly — no network event
-// and no DOM mutation for 400ms, capped at 10s so a page that never goes quiet
-// is shot as-is, masks covering its known tickers.
+// fetches goto never saw. Quiescence is observed directly — no running
+// finite animation, no network event and no DOM mutation for 400ms, capped
+// at 10s so a page that never goes quiet is shot as-is, masks covering its
+// known tickers. Animations are awaited, not polled: a drawer sliding open
+// is done exactly when its animation finishes. Infinite ones (spinners)
+// never finish and are left to the masks.
 //
 // A timestamp, not a set of pending requests: some requests emit a request
 // event and then neither requestfinished nor requestfailed, and one such leak
@@ -98,6 +102,18 @@ const settled = async (page: Page) => {
   const seen = lastRequestOf.get(page)!;
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
+    await page.evaluate(() =>
+      Promise.allSettled(
+        document
+          .getAnimations()
+          .filter(
+            (a) =>
+              a.playState === "running" &&
+              a.effect?.getComputedTiming().endTime !== Infinity,
+          )
+          .map((a) => a.finished),
+      ),
+    );
     if (
       Date.now() - seen.at > 400 &&
       (await page.evaluate(
@@ -113,12 +129,56 @@ const settled = async (page: Page) => {
   }
 };
 
+// Elements marked data-overlens-press open a state worth its own snapshot —
+// a drawer, a menu, a dialog. Only those on screen count: rendered, not
+// inert, not parked beside the viewport (a closed off-canvas drawer). An
+// element's identity is its attribute value, so equal values are one press
+// and the value names the snapshot; a bare attribute falls back to the
+// element's child-index path from the root, which names it too but moves
+// whenever the markup does — give presses a value to keep them stable.
+type Press = { id: string; name: string; selector: string };
+
+const pressables = (page: Page) =>
+  page.evaluate(() => {
+    const path = (el: Element): number[] =>
+      el.parentElement
+        ? [...path(el.parentElement), [...el.parentElement.children].indexOf(el) + 1]
+        : [];
+    const found = new Map<string, Press>();
+    for (const el of document.querySelectorAll<HTMLElement>(
+      "[data-overlens-press]",
+    )) {
+      const { left, right, width, height } = el.getBoundingClientRect();
+      if (
+        !width ||
+        !height ||
+        right <= 0 ||
+        left >= innerWidth ||
+        el.closest("[inert]") ||
+        !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      )
+        continue;
+      const value = el.dataset.overlensPress;
+      const id = value || path(el).join(".");
+      if (!found.has(id))
+        found.set(id, {
+          id,
+          name: id.replace(/[^\w.-]+/g, "-"),
+          selector: value
+            ? `[data-overlens-press="${CSS.escape(value)}"]`
+            : `:root > ${path(el).map((i) => `:nth-child(${i})`).join(" > ")}`,
+        });
+    }
+    return [...found.values()];
+  });
+
 // A page can wedge its own main thread (an app bug: an infinite render/
 // navigate loop). Playwright's evaluate has no timeout, so without a deadline
 // one broken page hangs the whole crawl silently until CI kills it. The
 // deadline covers everything legitimate (goto 30s + ready + four passes on a
-// slow runner); a page that busts it is unusable — no CDP call will ever
-// return — so the crawl closes it and continues on a fresh one.
+// slow runner; each pressed state gets its own); a page that busts it is
+// unusable — no CDP call will ever return — so the crawl closes it and
+// continues on a fresh one.
 const PAGE_DEADLINE = 90_000;
 const withDeadline = <T>(work: () => Promise<T>) => {
   let timer: ReturnType<typeof setTimeout>;
@@ -164,6 +224,44 @@ test("overlens crawl", async ({ context }) => {
   let page = await context.newPage();
   await preparePage(page);
 
+  // The page may be wedged beyond recovery — replace it. Cookies and
+  // storage live on the context, so the session carries over.
+  const replacePage = async () => {
+    await page.close().catch(() => {});
+    page = await context.newPage();
+    await preparePage(page);
+  };
+
+  const load = async (url: string) => {
+    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+    await overlens.ready?.(page);
+    await page.evaluate(() => document.fonts.ready);
+    await page.addStyleTag({
+      content:
+        "*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }",
+    });
+  };
+
+  const frame = async ({ width, theme }: Pass) => {
+    await page.setViewportSize({ width, height: 720 });
+    await overlens.theme(page, theme);
+  };
+
+  const shoot = async (file: string) => {
+    await normalize(page);
+    await settled(page);
+    await page.evaluate(() =>
+      Promise.all(
+        [...document.images].map((img) => img.decode().catch(() => {})),
+      ),
+    );
+    await page.screenshot({
+      path: `overlens-output/${file}.png`,
+      fullPage: true,
+      mask: mask.map((selector) => page.locator(selector)),
+    });
+  };
+
   // Entry pages keep their full href (query and all); every other page is
   // origin + path.
   const entryOf = new Map(
@@ -171,7 +269,8 @@ test("overlens crawl", async ({ context }) => {
   );
   const seen = new Set<string>();
   const queue = [...entryOf.keys()];
-  const pages: string[] = [];
+  // Captured page shapes, each pressed state listed as <shape>~<state>.
+  const pages = new Set<string>();
 
   while (queue.length) {
     const path = queue.shift()!.replace(/\/$/, "") || "/";
@@ -183,44 +282,24 @@ test("overlens crawl", async ({ context }) => {
     // has nothing to add: same screenshot, same links. Collapsing them is the
     // whole point of shaping. A shape only counts as captured once a visit
     // succeeds, so a page that fails still lets its siblings stand in.
-    if (pages.includes(pathShape)) continue;
+    if (pages.has(pathShape)) continue;
+    const url = entryOf.get(path) ?? `${entries[0].origin}${path}`;
+    const presses = new Map<Pass, Press[]>();
     const started = Date.now();
 
     try {
       await withDeadline(async () => {
-        await page.goto(entryOf.get(path) ?? `${entries[0].origin}${path}`, {
-          waitUntil: "networkidle",
-          timeout: 30000,
-        });
-        await overlens.ready?.(page);
-
-        await page.evaluate(() => document.fonts.ready);
-        await page.addStyleTag({
-          content:
-            "*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }",
-        });
-
-        for (const { name, width, theme } of overlens.passes) {
-          await page.setViewportSize({ width, height: 720 });
-          await overlens.theme(page, theme);
-          await normalize(page);
-          await settled(page);
-          await page.evaluate(() =>
-            Promise.all(
-              [...document.images].map((img) => img.decode().catch(() => {})),
-            ),
-          );
-          await page.screenshot({
-            path: `overlens-output/${name}/${fileBase(pathShape)}.png`,
-            fullPage: true,
-            mask: mask.map((selector) => page.locator(selector)),
-          });
+        await load(url);
+        for (const pass of overlens.passes) {
+          await frame(pass);
+          await shoot(`${pass.name}/${fileBase(pathShape)}`);
+          presses.set(pass, await pressables(page));
         }
         const hrefs = await page
           .locator("a[href^='/']:not([href^='//'])")
           .evaluateAll((as) => as.map((a) => a.getAttribute("href")!));
         queue.push(...hrefs.map((href) => href.split(/[?#]/)[0]));
-        pages.push(pathShape);
+        pages.add(pathShape);
       });
       console.info(
         `${pathShape} ${Date.now() - started}ms (visited ${seen.size}, queued ${queue.length})`,
@@ -229,14 +308,49 @@ test("overlens crawl", async ({ context }) => {
       console.info(
         `${pathShape} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
       );
-      // The page may be wedged beyond recovery — replace it. Cookies and
-      // storage live on the context, so the session carries over.
-      await page.close().catch(() => {});
-      page = await context.newPage();
-      await preparePage(page);
+      await replacePage();
+      continue;
+    }
+
+    // Every pressed state starts from a fresh load and replays its press
+    // chain, so no state leaks into another — a press inside an opened drawer
+    // is shot as drawer~press. Each element is pressed once per pass: what a
+    // state reveals is only explored when no earlier state claimed it.
+    for (const [pass, roots] of presses) {
+      const claimed = new Set(roots.map((press) => press.id));
+      const chains = roots.map((press) => [press]).reverse();
+      while (chains.length) {
+        const chain = chains.pop()!;
+        const suffix = chain.map((press) => `~${press.name}`).join("");
+        const state = `${pathShape}${suffix}`;
+        const pressed = Date.now();
+        try {
+          await withDeadline(async () => {
+            await load(url);
+            await frame(pass);
+            for (const { selector } of chain) {
+              await page.locator(selector).filter({ visible: true }).first().click();
+              await settled(page);
+            }
+            await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
+            const found = (await pressables(page)).filter(
+              (press) => !claimed.has(press.id),
+            );
+            found.forEach((press) => claimed.add(press.id));
+            chains.push(...found.map((press) => [...chain, press]).reverse());
+          });
+          pages.add(state);
+          console.info(`${state} ${pass.name} ${Date.now() - pressed}ms`);
+        } catch (error) {
+          console.info(
+            `${state} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
+          );
+          await replacePage();
+        }
+      }
     }
   }
 
-  expect(pages.length, "the crawl captured no pages at all").toBeGreaterThan(0);
-  writeFileSync("overlens-output/pages.txt", pages.sort().join("\n") + "\n");
+  expect(pages.size, "the crawl captured no pages at all").toBeGreaterThan(0);
+  writeFileSync("overlens-output/pages.txt", [...pages].sort().join("\n") + "\n");
 });

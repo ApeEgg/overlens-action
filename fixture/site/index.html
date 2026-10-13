@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture</title>
+    <style>
+      body { margin: 0; font: 16px sans-serif; }
+      [data-theme="dark"] body { background: #111; color: #eee; }
+      header { display: flex; gap: 1rem; padding: 1rem; background: #ddd; }
+      [data-theme="dark"] header { background: #333; }
+      aside { position: fixed; inset: 0 0 0 auto; width: 300px; padding: 1rem; background: #fc6; color: #000; }
+      aside[hidden], section[hidden], p[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/settings">Settings</a>
+      <button data-overlens-press="menu" onclick="slide(menu)">Menu</button>
+      <button data-overlens-press onclick="banner.hidden = !banner.hidden">Banner</button>
+    </header>
+    <p id="banner" hidden>Banner is shown</p>
+    <main>Home</main>
+    <aside id="menu" hidden>
+      <b>Drawer</b>
+      <button data-overlens-press="details" onclick="slide(details)">Details</button>
+      <section id="details" hidden>Nested details inside the drawer</section>
+    </aside>
+    <script>
+      const slide = (el) => {
+        el.hidden = false;
+        el.animate([{ transform: "translateX(100%)" }, { transform: "none" }], { duration: 1500 });
+      };
+    </script>
+  </body>
+</html>
