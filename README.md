@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   overlens:
-    uses: apeegg/overlens-action/.github/workflows/overlens.yml@v3
+    uses: apeegg/overlens-action/.github/workflows/overlens.yml@v4
     permissions:
       contents: write
       pull-requests: write
