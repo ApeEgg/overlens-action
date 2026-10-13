@@ -3,9 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <title>Fixture settings</title>
+    <style>aside[hidden] { display: none; }</style>
   </head>
   <body>
     <a href="/">Home</a>
-    <main>Settings, nothing to press</main>
+    <button data-overlens-press onclick="menu.hidden = false">Menu</button>
+    <button class="export" data-overlens-press onclick="exported.hidden = false">Export</button>
+    <main>Settings</main>
+    <aside id="menu" role="dialog" aria-label="Menu" hidden>The same drawer as home's, shot again under settings</aside>
+    <aside id="exported" role="dialog" aria-label="Export" hidden>Export drawer</aside>
   </body>
 </html>
