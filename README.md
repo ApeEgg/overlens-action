@@ -76,18 +76,6 @@ report and diff.
   opened from several pages is one state, filed under the first page that
   reached it. Give each distinct state its own value, and the same value
   wherever it opens the same thing.
-- **Reveals** — a press that only exposes other presses, like a dropdown menu
-  whose items open drawers, is marked `data-overlens-reveal` instead. It is
-  pressed to reach what it reveals and never shot or listed itself; the
-  presses behind it are named as if they sat on the page —
-  `<page>~<state>.png`, not `<page>~<menu>~<state>.png`:
-
-  ```html
-  <button data-overlens-reveal="actions">Actions</button>
-  <!-- rendered once the menu is open -->
-  <button data-overlens-press="share-drawer">Share</button>
-  ```
-
 - **No leaks** — every state starts from a fresh load of the page and replays
   its press chain. State the press persists (localStorage, the server) does
   carry over, so only mark presses that open things.
@@ -97,7 +85,7 @@ report and diff.
 ## Developing
 
 `fixture/run.sh` crawls a small fixture site — a drawer with a nested press
-inside it, a reveal menu, and a second page sharing a press with the first —
-with the engine end to end and lists the snapshots it took into
-`fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
+inside it, a dropdown menu whose item opens a drawer, and a second page sharing
+a press with the first — with the engine end to end and lists the snapshots it
+took into `fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
 chromium locally.
