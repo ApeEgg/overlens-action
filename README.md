@@ -67,9 +67,9 @@ report and diff.
 
 - **Identity** — the attribute value names the state and identifies the
   element, so elements sharing a value are one press. A bare
-  `data-overlens-press` falls back to the element's child-index path
-  (`home~2.1.3.png`), which moves whenever the markup does — give presses a
-  value.
+  `data-overlens-press` is identified by its place among the page's presses:
+  the 3rd is `<page>~3.png`, recorded as pressed so it's never pressed again.
+  Positions shift when the page's data adds or removes presses before it.
 - **Once per pass** — no element is pressed twice within a page's crawl, so a
   button still visible behind its own drawer isn't explored again, and a
   valued press is shot once per pass across the whole crawl: the same drawer

@@ -135,9 +135,9 @@ const settled = async (page: Page) => {
 // own state is never shot, listed or named. Only those on screen count:
 // rendered, not inert, not parked beside the viewport (a closed off-canvas
 // drawer). An element's identity is its attribute value, so equal values are
-// one press and the value names the snapshot; a bare attribute falls back to
-// the element's child-index path from the root, which names it too but moves
-// whenever the markup does — give presses a value to keep them stable.
+// one press and the value names the snapshot; a bare attribute is identified
+// by its place among the page's elements carrying the same attribute — the
+// page's 3rd press is <page>~3, whatever markup surrounds it.
 type Press = {
   id: string;
   name: string;
@@ -148,10 +148,6 @@ type Press = {
 
 const pressables = (page: Page) =>
   page.evaluate(() => {
-    const path = (el: Element): number[] =>
-      el.parentElement
-        ? [...path(el.parentElement), [...el.parentElement.children].indexOf(el) + 1]
-        : [];
     const found = new Map<string, Press>();
     for (const el of document.querySelectorAll<HTMLElement>(
       "[data-overlens-press], [data-overlens-reveal]",
@@ -169,7 +165,8 @@ const pressables = (page: Page) =>
       const reveal = !el.hasAttribute("data-overlens-press");
       const attribute = reveal ? "data-overlens-reveal" : "data-overlens-press";
       const value = el.getAttribute(attribute);
-      const key = value || path(el).join(".");
+      const nth = [...document.querySelectorAll(`[${attribute}]`)].indexOf(el);
+      const key = value || String(nth + 1);
       const id = reveal ? `reveal:${key}` : key;
       if (!found.has(id))
         found.set(id, {
@@ -177,7 +174,7 @@ const pressables = (page: Page) =>
           name: key.replace(/[^\w.-]+/g, "-"),
           selector: value
             ? `[${attribute}="${CSS.escape(value)}"]`
-            : `:root > ${path(el).map((i) => `:nth-child(${i})`).join(" > ")}`,
+            : `[${attribute}] >> nth=${nth}`,
           valued: !!value,
           reveal,
         });
