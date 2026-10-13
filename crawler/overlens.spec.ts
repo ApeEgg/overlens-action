@@ -116,7 +116,7 @@ const settled = async (page: Page) => {
 
 const PRESS = '[data-overlens-press=""], [data-overlens-press="true"]';
 
-type Press = { nth: number; selector: string };
+type Press = { nth: number; selector: string; group: string };
 
 type Opened = { name: string; menu: boolean };
 
@@ -137,7 +137,15 @@ const pressables = (page: Page) =>
       })
       .map((el) => {
         const nth = all.indexOf(el);
-        return { nth, selector: `${press} >> nth=${nth}` };
+        const path = (node: Element): string =>
+          node.parentElement
+            ? `${path(node.parentElement)}>${[...node.parentElement.children].indexOf(node)}`
+            : "";
+        return {
+          nth,
+          selector: `${press} >> nth=${nth}`,
+          group: `${path(el.parentElement!)}>${el.tagName}.${el.className}`,
+        };
       });
   }, PRESS);
 
@@ -320,6 +328,7 @@ test("overlens crawl", async ({ context }) => {
     for (const [pass, roots] of presses) {
       const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
       const claimed = new Set<number>();
+      const exhausted = new Set<string>();
       const take = (found: Press[]) => {
         const taken = found.filter(({ nth }) => !claimed.has(nth));
         taken.forEach(({ nth }) => claimed.add(nth));
@@ -331,6 +340,7 @@ test("overlens crawl", async ({ context }) => {
       while (chains.length) {
         const { presses: chain, names: before } = chains.pop()!;
         const last = chain.at(-1)!;
+        if (exhausted.has(last.group)) continue;
         const pressed = Date.now();
         try {
           await withDeadline(async () => {
@@ -346,6 +356,7 @@ test("overlens crawl", async ({ context }) => {
             const names = menu ? before : [...before, name];
             const key = names.join("~");
             const suffix = names.map((part) => `~${part}`).join("");
+            if (!menu && shot.has(key)) exhausted.add(last.group);
             if (!menu && !shot.has(key)) {
               await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
               shot.add(key);
