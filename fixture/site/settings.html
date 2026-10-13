@@ -7,10 +7,10 @@
   </head>
   <body>
     <a href="/">Home</a>
-    <button data-overlens-press="menu" onclick="menu.hidden = false">Menu</button>
-    <button data-overlens-press="export" onclick="exported.hidden = false">Export</button>
+    <button data-overlens-press onclick="menu.hidden = false">Menu</button>
+    <button data-overlens-press onclick="exported.hidden = false">Export</button>
     <main>Settings</main>
-    <aside id="menu" hidden>The same drawer as home's — already shot there</aside>
-    <aside id="exported" hidden>Export drawer</aside>
+    <aside id="menu" role="dialog" aria-label="Menu" hidden>The same drawer as home's, already shot there</aside>
+    <aside id="exported" role="dialog" aria-label="Export" hidden>Export drawer</aside>
   </body>
 </html>

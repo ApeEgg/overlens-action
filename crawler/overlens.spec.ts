@@ -114,44 +114,90 @@ const settled = async (page: Page) => {
   }
 };
 
-type Press = {
-  id: string;
-  name: string;
-  selector: string;
-  valued: boolean;
-};
+const PRESS = '[data-overlens-press=""], [data-overlens-press="true"]';
+
+type Press = { nth: number; selector: string };
+
+type Opened = { name: string; menu: boolean };
 
 const pressables = (page: Page) =>
+  page.evaluate((press) => {
+    const all = [...document.querySelectorAll<HTMLElement>(press)];
+    return all
+      .filter((el) => {
+        const { left, right, width, height } = el.getBoundingClientRect();
+        return (
+          width &&
+          height &&
+          right > 0 &&
+          left < innerWidth &&
+          !el.closest("[inert]") &&
+          el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+        );
+      })
+      .map((el) => {
+        const nth = all.indexOf(el);
+        return { nth, selector: `${press} >> nth=${nth}` };
+      });
+  }, PRESS);
+
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60);
+
+const topmost = (page: Page) =>
   page.evaluate(() => {
-    const found = new Map<string, Press>();
-    for (const el of document.querySelectorAll<HTMLElement>(
-      "[data-overlens-press]",
-    )) {
-      const { left, right, width, height } = el.getBoundingClientRect();
-      if (
-        !width ||
-        !height ||
-        right <= 0 ||
-        left >= innerWidth ||
-        el.closest("[inert]") ||
-        !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
-      )
-        continue;
-      const value = el.dataset.overlensPress?.replace(/^true$/, "");
-      const nth = [...document.querySelectorAll("[data-overlens-press]")].indexOf(el);
-      const id = value || String(nth + 1);
-      if (!found.has(id))
-        found.set(id, {
-          id,
-          name: id.replace(/[^\w.-]+/g, "-"),
-          selector: value
-            ? `[data-overlens-press="${CSS.escape(value)}"]`
-            : `[data-overlens-press] >> nth=${nth}`,
-          valued: !!value,
-        });
-    }
-    return [...found.values()];
+    const top = [
+      ...document.querySelectorAll<HTMLElement>(
+        "dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true], [role=menu], [role=listbox]",
+      ),
+    ]
+      .filter((el) => {
+        const { width, height } = el.getBoundingClientRect();
+        return (
+          width &&
+          height &&
+          !el.closest("[inert]") &&
+          el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+        );
+      })
+      .at(-1);
+    if (!top) return null;
+    const name = (
+      top.getAttribute("aria-label") ||
+      (top.getAttribute("aria-labelledby") ?? "")
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ")
+        .trim() ||
+      top.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]")?.textContent ||
+      ""
+    ).trim();
+    return { name, menu: ["menu", "listbox"].includes(top.getAttribute("role") ?? "") };
   });
+
+const pressName = (page: Page, nth: number) =>
+  page.evaluate(
+    ({ press, nth }) => {
+      const el = document.querySelectorAll(press)[nth];
+      return el?.getAttribute("aria-label") || el?.textContent?.trim() || "";
+    },
+    { press: PRESS, nth },
+  );
+
+const opened = async (page: Page, press: Press, prior: Awaited<ReturnType<typeof topmost>>) => {
+  const top = await topmost(page);
+  const fresh = !!top && (!prior || top.name !== prior.name || top.menu !== prior.menu);
+  return {
+    name:
+      slug((fresh && top.name) || (await pressName(page, press.nth))) ||
+      String(press.nth + 1),
+    menu: fresh && top.menu,
+  } satisfies Opened;
+};
 
 const PAGE_DEADLINE = 90_000;
 const withDeadline = <T>(work: () => Promise<T>) => {
@@ -273,42 +319,48 @@ test("overlens crawl", async ({ context }) => {
 
     for (const [pass, roots] of presses) {
       const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
-      const claimed = new Set<string>();
-      const fresh = (press: Press) =>
-        !claimed.has(press.id) && !(press.valued && shot.has(press.id));
+      const claimed = new Set<number>();
       const take = (found: Press[]) => {
-        const taken = found.filter(fresh);
-        taken.forEach((press) => claimed.add(press.id));
+        const taken = found.filter(({ nth }) => !claimed.has(nth));
+        taken.forEach(({ nth }) => claimed.add(nth));
         return taken;
       };
-      const chains = take(roots).map((press) => [press]).reverse();
+      const chains = take(roots)
+        .map((press) => ({ presses: [press], names: [] as string[] }))
+        .reverse();
       while (chains.length) {
-        const chain = chains.pop()!;
+        const { presses: chain, names: before } = chains.pop()!;
         const last = chain.at(-1)!;
-        const suffix = chain.map((press) => `~${press.name}`).join("");
-        const state = `${pathShape}${suffix}`;
         const pressed = Date.now();
         try {
           await withDeadline(async () => {
             await load(url);
             await frame(pass);
+            let prior: Awaited<ReturnType<typeof topmost>> = null;
             for (const { selector } of chain) {
+              prior = await topmost(page);
               await page.locator(selector).filter({ visible: true }).first().click();
               await settled(page);
             }
-            await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
+            const { name, menu } = await opened(page, last, prior);
+            const names = menu ? before : [...before, name];
+            const key = names.join("~");
+            const suffix = names.map((part) => `~${part}`).join("");
+            if (!menu && !shot.has(key)) {
+              await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
+              shot.add(key);
+              pages.add(`${pathShape}${suffix}`);
+              console.info(`${pathShape}${suffix} ${pass.name} ${Date.now() - pressed}ms`);
+            }
             chains.push(
               ...take(await pressables(page))
-                .map((press) => [...chain, press])
+                .map((press) => ({ presses: [...chain, press], names }))
                 .reverse(),
             );
           });
-          pages.add(state);
-          if (last.valued) shot.add(last.id);
-          console.info(`${state} ${pass.name} ${Date.now() - pressed}ms`);
         } catch (error) {
           console.info(
-            `${state} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
+            `${pathShape}~${last.nth + 1} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
           );
           await replacePage();
         }

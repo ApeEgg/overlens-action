@@ -51,38 +51,44 @@ All optional — the defaults cover Vercel on hosted runners.
 ## Pressed states
 
 A drawer, menu or dialog is only on screen after a click. Mark the element
-that opens it with `data-overlens-press` and the crawl shoots the opened state
-too — no config needed:
+that opens it with a bare `data-overlens-press` and the crawl shoots the
+opened state too — no config needed:
 
 ```html
-<button data-overlens-press="edit-drawer">Edit</button>
+<button data-overlens-press>Edit</button>
 ```
+
+The attribute counts when it's bare, empty or `"true"` — React renders a bare
+JSX `<button data-overlens-press>` as `data-overlens-press="true"`. Any other
+value, `"false"` included, isn't a press.
 
 After a page's own passes, each pass (viewport and theme) presses every
 marked element on screen, waits until running animations finish and the page
-settles, and shoots `<viewport>-<theme>/<page>~<state>.png`. Marked elements
-the opened state reveals — a press inside the drawer — are pressed next and
-shot as `<page>~<state>~<nested>.png`. Each state lands as its own page in the
-report and diff.
+settles, and works out what the press opened: the topmost visible
+`dialog[open]`, `[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`,
+`[role=menu]` or `[role=listbox]` that wasn't on top before the press. The
+state is named after that element's accessible name — `aria-label`, else the
+text its `aria-labelledby` points to, else its first heading — and shot as
+`<viewport>-<theme>/<page>~<name>.png`. When nothing new opened, the press's
+own label (`aria-label`, else its text) names the state. Marked elements the
+opened state reveals are pressed next and shot as `<page>~<name>~<nested>.png`.
 
-- **Identity** — the attribute value names the state and identifies the
-  element, so elements sharing a value are one press. A bare
-  `data-overlens-press` — or `data-overlens-press="true"`, which is what React
-  renders for a bare JSX `<button data-overlens-press>` — is identified by its
-  place among the page's presses:
-  the 3rd is `<page>~3.png`, recorded as pressed so it's never pressed again.
-  Positions shift when the page's data adds or removes presses before it.
-- **Once per pass** — no element is pressed twice within a page's crawl, so a
-  button still visible behind its own drawer isn't explored again, and a
-  valued press is shot once per pass across the whole crawl: the same drawer
-  opened from several pages is one state, filed under the first page that
-  reached it. Give each distinct state its own value, and the same value
-  wherever it opens the same thing.
+- **Same state, one shot** — a state is shot once per pass across the whole
+  crawl. Ten rows opening the same drawer, or one drawer opened from several
+  pages, give one snapshot, filed under the first page that reached it. Name
+  dialogs by what they are: a dialog titled with data (a customer, an episode)
+  is a new state for every value, so give it a fixed `aria-label` instead.
+- **Menus are a way in** — a `[role=menu]` or `[role=listbox]` a press opens
+  isn't shot; its marked items are pressed and named as if they sat on the
+  page, `<page>~<name>.png`.
+- **Pressed once** — each marked element is recorded by its place among the
+  page's presses, so nothing is pressed twice within a page's crawl and a
+  button still visible behind its own drawer isn't explored again.
 - **No leaks** — every state starts from a fresh load of the page and replays
   its press chain. State the press persists (localStorage, the server) does
   carry over, so only mark presses that open things.
-- **Time** — each state is a full page load, counted against
-  `timeoutMinutes`.
+- **Time** — each press is a full page load, counted against
+  `timeoutMinutes`, including presses whose state was already shot.
 
 ## Masks
 
@@ -102,7 +108,8 @@ selectors on top; it never replaces the attribute.
 ## Developing
 
 `fixture/run.sh` crawls a small fixture site — a drawer with a nested press
-inside it, a dropdown menu whose item opens a drawer, a masked element, and a
-second page sharing a press with the first — with the engine end to end and lists the snapshots it
+inside it, a menu whose item opens a drawer, three rows opening the same
+dialog, a masked element, and a second page opening a dialog the first page
+already shot — with the engine end to end and lists the snapshots it
 took into `fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
 chromium locally.
