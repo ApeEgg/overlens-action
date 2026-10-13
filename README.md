@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   overlens:
-    uses: apeegg/overlens-action/.github/workflows/overlens.yml@v1
+    uses: apeegg/overlens-action/.github/workflows/overlens.yml@v3
     permissions:
       contents: write
       pull-requests: write
@@ -47,3 +47,40 @@ All optional — the defaults cover Vercel on hosted runners.
 | `environments` | `Preview\|Production` | regex a deployment's environment name must match |
 | `inspector` | `https://overlens.korte.kim` | origin the report links point to |
 | `runner` | `ubuntu-latest` | runner label for all jobs |
+
+## Pressed states
+
+A drawer, menu or dialog is only on screen after a click. Mark the element
+that opens it with `data-overlens-press` and the crawl shoots the opened state
+too — no config needed:
+
+```html
+<button data-overlens-press="edit-drawer">Edit</button>
+```
+
+After a page's own passes, each pass (viewport and theme) presses every
+marked element on screen, waits until running animations finish and the page
+settles, and shoots `<viewport>-<theme>/<page>~<state>.png`. Marked elements
+the opened state reveals — a press inside the drawer — are pressed next and
+shot as `<page>~<state>~<nested>.png`. Each state lands as its own page in the
+report and diff.
+
+- **Identity** — the attribute value names the state and identifies the
+  element, so elements sharing a value are one press. A bare
+  `data-overlens-press` falls back to the element's child-index path
+  (`home~2.1.3.png`), which moves whenever the markup does — give presses a
+  value.
+- **Once per pass** — no element is pressed twice within a page's crawl, so a
+  button still visible behind its own drawer isn't explored again.
+- **No leaks** — every state starts from a fresh load of the page and replays
+  its press chain. State the press persists (localStorage, the server) does
+  carry over, so only mark presses that open things.
+- **Time** — each state is a full page load, counted against
+  `timeoutMinutes`.
+
+## Developing
+
+`fixture/run.sh` crawls a small fixture site — a drawer with a nested press
+inside it — with the engine end to end and lists the snapshots it took into
+`fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
+chromium locally.

@@ -249,7 +249,9 @@ jobs:
           CHANGED=$(echo "$CH" | wc -w | tr -d ' ')
           awk -F'\t' '$1=="D"{print $2}' /tmp/staged.txt | sed -E 's|^[^/]+/||; s/\.png$//' | sort -u > /tmp/removed-bases.txt
           {
-            awk 'NR==FNR{rm[$0]=1; next} { b=($0=="/"?"home":substr($0,2)); gsub(/_/,"__",b); gsub(/\//,"_",b); if (b in rm) print }' \
+            # A pressed state is listed as <page>~<state> and filed as
+            # <page base>~<state>.
+            awk 'NR==FNR{rm[$0]=1; next} { p=$0; st=""; i=index(p, "~"); if (i) { st=substr(p, i); p=substr(p, 1, i-1) } b=(p=="/"?"home":substr(p,2)); gsub(/_/,"__",b); gsub(/\//,"_",b); if ((b st) in rm) print }' \
               /tmp/removed-bases.txt /tmp/baseline-pages.txt
             cat "$GITHUB_WORKSPACE/overlens-output/pages.txt"
           } | sort -u > /tmp/sitemap-pages.txt
@@ -293,19 +295,31 @@ jobs:
             awk -v ch="$CH" '
               function nid(p){ if (!(p in ids)) ids[p]="n" (++idc); return ids[p] }
               function lbl(s){ gsub(/\[/, "(", s); gsub(/\]/, ")", s); return s }
-              function pbase(p,  s){ if (p=="/") return "home"; s=substr(p, 2); gsub(/_/, "__", s); gsub(/\//, "_", s); return s }
+              function pbase(p,  s, st, i){ i=index(p, "~"); if (i) { st=substr(p, i); p=substr(p, 1, i-1) } if (p=="/") return "home" st; s=substr(p, 2); gsub(/_/, "__", s); gsub(/\//, "_", s); return s st }
               BEGIN{ n=split(ch, a, " "); for (i=1; i<=n; i++) if (a[i]!="") changed[a[i]]=1; print "graph TD" }
               {
                 if ($0=="") next
                 pageorder[++pc]=$0
+                p=$0; st=""; i=index(p, "~"); if (i) { st=substr(p, i+1); p=substr(p, 1, i-1) }
                 path=""
-                cnt=split(substr($0, 2), seg, "/")
+                cnt=split(substr(p, 2), seg, "/")
                 for (i=1; i<=cnt; i++) {
                   parent=(path==""?"/":path)
                   path=path "/" seg[i]
                   if (!(path in known)) {
                     known[path]=1
                     edges[++ec]=nid(parent) " --> " nid(path) "[\"" lbl(seg[i]) "\"]"
+                  }
+                }
+                # Pressed states hang off their page by a dotted edge.
+                path=(path==""?"/":path)
+                cnt=split(st, seg, "~")
+                for (i=1; i<=cnt; i++) {
+                  parent=path
+                  path=path "~" seg[i]
+                  if (!(path in known)) {
+                    known[path]=1
+                    edges[++ec]=nid(parent) " -.-> " nid(path) "[\"~" lbl(seg[i]) "\"]"
                   }
                 }
               }
