@@ -130,13 +130,21 @@ const settled = async (page: Page) => {
 };
 
 // Elements marked data-overlens-press open a state worth its own snapshot —
-// a drawer, a menu, a dialog. Only those on screen count: rendered, not
-// inert, not parked beside the viewport (a closed off-canvas drawer). An
-// element's identity is its attribute value, so equal values are one press
-// and the value names the snapshot; a bare attribute falls back to the
-// element's child-index path from the root, which names it too but moves
+// a drawer, a menu, a dialog. Elements marked data-overlens-reveal (a
+// dropdown trigger) are pressed only to reach the presses they reveal; their
+// own state is never shot, listed or named. Only those on screen count:
+// rendered, not inert, not parked beside the viewport (a closed off-canvas
+// drawer). An element's identity is its attribute value, so equal values are
+// one press and the value names the snapshot; a bare attribute falls back to
+// the element's child-index path from the root, which names it too but moves
 // whenever the markup does — give presses a value to keep them stable.
-type Press = { id: string; name: string; selector: string };
+type Press = {
+  id: string;
+  name: string;
+  selector: string;
+  valued: boolean;
+  reveal: boolean;
+};
 
 const pressables = (page: Page) =>
   page.evaluate(() => {
@@ -146,7 +154,7 @@ const pressables = (page: Page) =>
         : [];
     const found = new Map<string, Press>();
     for (const el of document.querySelectorAll<HTMLElement>(
-      "[data-overlens-press]",
+      "[data-overlens-press], [data-overlens-reveal]",
     )) {
       const { left, right, width, height } = el.getBoundingClientRect();
       if (
@@ -158,15 +166,20 @@ const pressables = (page: Page) =>
         !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
       )
         continue;
-      const value = el.dataset.overlensPress;
-      const id = value || path(el).join(".");
+      const reveal = !el.hasAttribute("data-overlens-press");
+      const attribute = reveal ? "data-overlens-reveal" : "data-overlens-press";
+      const value = el.getAttribute(attribute);
+      const key = value || path(el).join(".");
+      const id = reveal ? `reveal:${key}` : key;
       if (!found.has(id))
         found.set(id, {
           id,
-          name: id.replace(/[^\w.-]+/g, "-"),
+          name: key.replace(/[^\w.-]+/g, "-"),
           selector: value
-            ? `[data-overlens-press="${CSS.escape(value)}"]`
+            ? `[${attribute}="${CSS.escape(value)}"]`
             : `:root > ${path(el).map((i) => `:nth-child(${i})`).join(" > ")}`,
+          valued: !!value,
+          reveal,
         });
     }
     return [...found.values()];
@@ -271,6 +284,8 @@ test("overlens crawl", async ({ context }) => {
   const queue = [...entryOf.keys()];
   // Captured page shapes, each pressed state listed as <shape>~<state>.
   const pages = new Set<string>();
+  // Valued presses already shot, per pass, across the whole crawl.
+  const shotOf = new Map<Pass, Set<string>>();
 
   while (queue.length) {
     const path = queue.shift()!.replace(/\/$/, "") || "/";
@@ -314,14 +329,30 @@ test("overlens crawl", async ({ context }) => {
 
     // Every pressed state starts from a fresh load and replays its press
     // chain, so no state leaks into another — a press inside an opened drawer
-    // is shot as drawer~press. Each element is pressed once per pass: what a
-    // state reveals is only explored when no earlier state claimed it.
+    // is shot as drawer~press, a press behind a reveal as just press. Each
+    // element is pressed once per pass: what a state reveals is only explored
+    // when no earlier state claimed it, and a valued press shot on one page is
+    // never pressed again on another — the same drawer opened from two pages
+    // is one state, filed under the page that reached it first.
     for (const [pass, roots] of presses) {
-      const claimed = new Set(roots.map((press) => press.id));
-      const chains = roots.map((press) => [press]).reverse();
+      const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
+      const claimed = new Set<string>();
+      const fresh = (press: Press) =>
+        !claimed.has(press.id) &&
+        !(press.valued && !press.reveal && shot.has(press.id));
+      const take = (found: Press[]) => {
+        const taken = found.filter(fresh);
+        taken.forEach((press) => claimed.add(press.id));
+        return taken;
+      };
+      const chains = take(roots).map((press) => [press]).reverse();
       while (chains.length) {
         const chain = chains.pop()!;
-        const suffix = chain.map((press) => `~${press.name}`).join("");
+        const last = chain.at(-1)!;
+        const suffix = chain
+          .filter((press) => !press.reveal)
+          .map((press) => `~${press.name}`)
+          .join("");
         const state = `${pathShape}${suffix}`;
         const pressed = Date.now();
         try {
@@ -332,18 +363,21 @@ test("overlens crawl", async ({ context }) => {
               await page.locator(selector).filter({ visible: true }).first().click();
               await settled(page);
             }
-            await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
-            const found = (await pressables(page)).filter(
-              (press) => !claimed.has(press.id),
+            if (!last.reveal)
+              await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
+            chains.push(
+              ...take(await pressables(page))
+                .map((press) => [...chain, press])
+                .reverse(),
             );
-            found.forEach((press) => claimed.add(press.id));
-            chains.push(...found.map((press) => [...chain, press]).reverse());
           });
+          if (last.reveal) continue;
           pages.add(state);
+          if (last.valued) shot.add(last.id);
           console.info(`${state} ${pass.name} ${Date.now() - pressed}ms`);
         } catch (error) {
           console.info(
-            `${state} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
+            `${state}${last.reveal ? ` (reveal ${last.name})` : ""} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
           );
           await replacePage();
         }
