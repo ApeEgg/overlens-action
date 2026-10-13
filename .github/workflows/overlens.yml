@@ -1,8 +1,5 @@
 name: Overlens
 
-# The engine consumers reference from their own overlens.yml — see the
-# install guide at https://overlens.korte.kim. Triggers and concurrency
-# stay caller-side — GitHub requires it — everything else lives here.
 on:
   workflow_call:
     inputs:
@@ -22,15 +19,9 @@ on:
 jobs:
   crawl:
     name: Crawl & Snapshot
-    # Production deployments are how the targetBranch gets its baseline crawl.
     if: ${{ github.event_name == 'deployment_status' && github.event.deployment_status.state == 'success' && github.event.deployment_status.target_url != '' }}
     timeout-minutes: 60
     runs-on: ${{ inputs.runner }}
-    # Pinned so text rasterises identically across crawls: freetype and
-    # fontconfig differ between runner images, which shifts every glyph a
-    # subpixel and diffs every page. The tag moves in lockstep with
-    # crawler/package.json's @playwright/test — bump both together; the
-    # image ships that version's browsers, so no install step.
     container: mcr.microsoft.com/playwright:v1.62.1-noble
     permissions:
       contents: read
@@ -38,9 +29,6 @@ jobs:
       createPR: ${{ steps.flags.outputs.createPR }}
       targetBranch: ${{ steps.flags.outputs.targetBranch }}
     steps:
-      # Expressions have no regex, so the environment filter is a step: a
-      # deploy whose environment doesn't match leaves every later step
-      # skipped and the publish job gated off by the empty targetBranch.
       - name: Match environment
         id: gate
         env:
@@ -52,13 +40,10 @@ jobs:
           else
             echo "\"$ENVIRONMENT\" doesn't match /$ENVIRONMENTS/ — not a deployment Overlens crawls"
           fi
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29
         if: steps.gate.outputs.go
         with:
           persist-credentials: false
-      # A commit from before the config landed (or after it was removed) has
-      # nothing to crawl — deploys of such branches skip the same way a
-      # non-matching environment does, instead of failing on the import.
       - name: Check for config
         id: config
         if: steps.gate.outputs.go
@@ -68,9 +53,7 @@ jobs:
           else
             echo "No overlens.config at this commit — nothing to crawl."
           fi
-      # The crawl engine rides with this workflow: job.workflow_sha is the
-      # ref the caller pinned, so a consumer on a tag gets that tag's engine.
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29
         if: steps.config.outputs.present
         with:
           repository: ${{ job.workflow_repository }}
@@ -78,23 +61,18 @@ jobs:
           path: .overlens
           sparse-checkout: crawler
           persist-credentials: false
-      # The playwright image lacks unzip, which setup-bun needs.
       - if: steps.config.outputs.present
         run: |
           apt-get -o Acquire::Retries=3 update \
             && apt-get install -y --no-install-recommends -o Acquire::Retries=3 unzip
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         if: steps.config.outputs.present
       - name: Read config flags
         id: flags
         if: steps.config.outputs.present
-        # The config may derive values from the deploy URL at import time, so
-        # it gets the same env the crawl runs under. Bun imports it straight
-        # from source with no install — the config stays dependency-free.
         env:
           PLAYWRIGHT_BASE_URL: ${{ github.event.deployment_status.target_url }}
         run: |
-          # Extensionless import — bun resolves overlens.config.ts or .js.
           TARGET=$(bun -e 'console.log((await import("./overlens.config")).default.targetBranch)')
           case "$TARGET" in ''|undefined) echo "overlens.config must set targetBranch" >&2; exit 1;; esac
           echo "targetBranch=$TARGET" >> $GITHUB_OUTPUT
@@ -126,25 +104,16 @@ jobs:
       TARGET_BRANCH: ${{ needs.crawl.outputs.targetBranch }}
       INSPECTOR: ${{ inputs.inspector }}
     steps:
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29
         with:
           fetch-depth: 0
           persist-credentials: false
-      # The hosted image usually ships both; a cold apt run here has eaten
-      # 9+ minutes of mirror roulette — once a full 20-minute job timeout —
-      # so only install what's missing, skip imagemagick's recommends
-      # (ghostscript, fonts — most of the download, unused by `compare`) and
-      # retry past flaky mirrors.
       - run: |
           command -v compare >/dev/null && command -v jq >/dev/null \
             || (sudo apt-get -o Acquire::Retries=3 update \
               && sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 imagemagick jq)
       - name: Resolve slug
         run: |
-          # A deploy can land after a newer push — name-rev then answers
-          # "branch~N"; the branch is the part before the suffix, and only
-          # the branch's current tip may publish (a stale deploy must not
-          # roll the snapshots back).
           BRANCH=$(git name-rev --name-only --exclude 'tags/*' $GITHUB_SHA)
           BRANCH="${BRANCH#remotes/origin/}"
           BRANCH="${BRANCH%%[~^]*}"
@@ -169,9 +138,6 @@ jobs:
         if: env.SLUG
         run: |
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          # Probe first: a transient failure aborts here (set -e), it must
-          # never masquerade as "no baseline yet" and force-push a fresh
-          # history over the accumulated one.
           LS=$(git ls-remote "$REMOTE" refs/heads/overlens/dev)
           if [ -n "$LS" ]; then
             echo "DEV_EXISTS=1" >> $GITHUB_ENV
@@ -184,8 +150,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BASE_SHA=$(git rev-parse -q --verify HEAD || true)
           cp -R "$GITHUB_WORKSPACE/overlens-output/." .
-          # Keeps a Vercel-linked repo from deploying snapshot branches;
-          # inert on any other host.
           printf '{ "git": { "deploymentEnabled": false } }\n' > vercel.json
           : > /tmp/diff-stats.txt
           if [ -n "$BASE_SHA" ]; then
@@ -197,19 +161,8 @@ jobs:
               GEO=$(identify -format '%w %h ' /tmp/baseline.png "$f" 2>/dev/null \
                 | awk 'NF==4{ o=($1<$3?$1:$3)*($2<$4?$2:$4); print ($1<$3?$1:$3) "x" ($2<$4?$2:$4), o, ($1>$3?$1:$3)*($2>$4?$2:$4)-o }' || true)
               read -r OVERLAP OAREA PAD <<< "${GEO:-x 0 0}"
-              # 5% per-channel: anti-aliasing jitters glyph edges by 2-3%
-              # between renders (and the exact 2% boundary rounds differently
-              # across ImageMagick versions), while any visible change moves
-              # channels by 30%+. The pixel floor is the backstop for the
-              # jitter that clears even that — a real change is never a
-              # couple dozen pixels on a full-page shot.
               AE=$(compare -fuzz 5% -metric AE "/tmp/baseline.png[$OVERLAP+0+0]" "$f[$OVERLAP+0+0]" null: 2>&1 | grep -oE '^[0-9.eE+-]+' || true)
-              # Only floor a plain count — an empty or scientific-notation AE
-              # is compare failing, and that must stay flagged, not zeroed.
               case "$AE" in ''|*[eE]*) ;; *) [ "${AE%%.*}" -gt 32 ] || AE=0 ;; esac
-              # An identical shared area is no change on a PR — height deltas
-              # are missing pixels, not diffs. The dev baseline still adopts
-              # new heights so it keeps tracking the crawler's viewport.
               if [ "$AE" = "0" ] && { [ "$SLUG" != "dev" ] || [ "$PAD" = "0" ]; }; then
                 git checkout -q -- "$f"
               else
@@ -249,8 +202,6 @@ jobs:
           CHANGED=$(echo "$CH" | wc -w | tr -d ' ')
           awk -F'\t' '$1=="D"{print $2}' /tmp/staged.txt | sed -E 's|^[^/]+/||; s/\.png$//' | sort -u > /tmp/removed-bases.txt
           {
-            # A pressed state is listed as <page>~<state> and filed as
-            # <page base>~<state>.
             awk 'NR==FNR{rm[$0]=1; next} { p=$0; st=""; i=index(p, "~"); if (i) { st=substr(p, i); p=substr(p, 1, i-1) } b=(p=="/"?"home":substr(p,2)); gsub(/_/,"__",b); gsub(/\//,"_",b); if ((b st) in rm) print }' \
               /tmp/removed-bases.txt /tmp/baseline-pages.txt
             cat "$GITHUB_WORKSPACE/overlens-output/pages.txt"
@@ -282,9 +233,6 @@ jobs:
                 D*) label="removed" ;;
                 *) label=$(awk -v f="$f" '$1==f{print $2}' /tmp/diff-stats.txt) ;;
               esac
-              # The compare page carries the same per-file anchors as the PR's
-              # own files view — which is what lets the report be authored
-              # before the PR exists.
               anchor=$(printf '%s' "$f" | sha256sum | cut -d' ' -f1)
               echo "[$f](https://github.com/${GITHUB_REPOSITORY}/compare/overlens/dev...overlens/$SLUG#diff-$anchor) (${label:-changed})"
             done < /tmp/staged.txt
@@ -311,7 +259,6 @@ jobs:
                     edges[++ec]=nid(parent) " --> " nid(path) "[\"" lbl(seg[i]) "\"]"
                   }
                 }
-                # Pressed states hang off their page by a dotted edge.
                 path=(path==""?"/":path)
                 cnt=split(st, seg, "~")
                 for (i=1; i<=cnt; i++) {
@@ -338,8 +285,6 @@ jobs:
           if [ -n "$VPR" ]; then
             gh pr edit "${VPR##*/}" --title "$TITLE" --body-file /tmp/body.md
           elif [ "$CHANGED" -gt 0 ] && [ "$CREATE_PR" != "false" ] && [ -n "$DEV_EXISTS" ]; then
-            # Born with its final report — a failure later in this step can
-            # never leave a half-made placeholder PR behind.
             VPR=$(gh pr create --draft --base overlens/dev --head "overlens/$SLUG" \
               --title "$TITLE" --body-file /tmp/body.md) || VPR=""
           fi
@@ -381,9 +326,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
-          # Deleting the head branch normally auto-closes the PR, but GitHub
-          # treats that as best-effort and can drop it in the post-merge
-          # burst, leaving a zombie PR — so close it explicitly first.
           PR=$(gh pr list -R "$GITHUB_REPOSITORY" --head "overlens/pr-${{ github.event.pull_request.number }}" --state open --json number -q '.[0].number')
           [ -z "$PR" ] || gh pr close -R "$GITHUB_REPOSITORY" "$PR"
           gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/overlens/pr-${{ github.event.pull_request.number }}" || true

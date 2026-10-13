@@ -2,8 +2,6 @@ import { writeFileSync } from "fs";
 
 import { expect, test, type Page } from "@playwright/test";
 
-// The workflow runs this from .overlens/crawler inside the consumer's
-// workspace — the repo's overlens.config sits two levels up.
 import overlens from "../../overlens.config";
 
 test.skip(!process.env.OVERLENS, "overlens crawl runs in CI only");
@@ -12,9 +10,6 @@ test.describe.configure({ retries: 0 });
 const shape =
   overlens.shape ??
   ((path: string) => path.replace(/\/(?=[^/]*\d)[^/]{8,}/g, "/[id]"));
-// Elements carrying data-overlens-mask are always masked — bare, empty or
-// "true" (a bare JSX data-* attribute renders as "true"); config.mask adds
-// selectors on top.
 const mask = [
   '[data-overlens-mask=""], [data-overlens-mask="true"]',
   ...(overlens.mask ?? []),
@@ -38,8 +33,6 @@ const clock = (page: Page, timestamp: number) =>
 }`);
 
 const base = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
-// Entries resolve against the deploy URL, so both plain paths ("/") and
-// absolute URLs (a vendor subdomain) work.
 const entries = (overlens.pagesIncluded ?? ["/"]).map((p) => new URL(p, base));
 const excluded = (path: string) =>
   overlens.pagesExcluded?.some((p) => path === p || path.startsWith(`${p}/`));
@@ -72,20 +65,6 @@ const normalize = (page: Page) =>
       });
   }, tokens);
 
-// A page is ready to screenshot when it has stopped changing, not when the
-// network went idle at goto time: state arriving over a websocket mounts
-// content long after networkidle, and those mounts fire fresh component
-// fetches goto never saw. Quiescence is observed directly — no running
-// finite animation, no network event and no DOM mutation for 400ms, capped
-// at 10s so a page that never goes quiet is shot as-is, masks covering its
-// known tickers. Animations are awaited, not polled: a drawer sliding open
-// is done exactly when its animation finishes. Infinite ones (spinners)
-// never finish and are left to the masks.
-//
-// A timestamp, not a set of pending requests: some requests emit a request
-// event and then neither requestfinished nor requestfailed, and one such leak
-// poisons a set permanently — the page would never look idle again. An event
-// that never arrives simply stops bumping the clock.
 const lastRequestOf = new WeakMap<Page, { at: number }>();
 
 const trackRequests = (page: Page) => {
@@ -135,14 +114,6 @@ const settled = async (page: Page) => {
   }
 };
 
-// Elements marked data-overlens-press open a state worth its own snapshot —
-// a drawer, a menu, a dialog. Only those on screen count:
-// rendered, not inert, not parked beside the viewport (a closed off-canvas
-// drawer). An element's identity is its attribute value, so equal values are
-// one press and the value names the snapshot; a bare attribute — or "true",
-// which is how React renders a bare JSX data-* attribute — is identified by
-// its place among the page's presses: the page's 3rd press is <page>~3,
-// whatever markup surrounds it.
 type Press = {
   id: string;
   name: string;
@@ -182,19 +153,10 @@ const pressables = (page: Page) =>
     return [...found.values()];
   });
 
-// A page can wedge its own main thread (an app bug: an infinite render/
-// navigate loop). Playwright's evaluate has no timeout, so without a deadline
-// one broken page hangs the whole crawl silently until CI kills it. The
-// deadline covers everything legitimate (goto 30s + ready + four passes on a
-// slow runner; each pressed state gets its own); a page that busts it is
-// unusable — no CDP call will ever return — so the crawl closes it and
-// continues on a fresh one.
 const PAGE_DEADLINE = 90_000;
 const withDeadline = <T>(work: () => Promise<T>) => {
   let timer: ReturnType<typeof setTimeout>;
   const working = work();
-  // The losing arm still rejects later (its page gets closed) — mark it
-  // handled so the crawl doesn't die on an unhandled rejection.
   working.catch(() => {});
   return Promise.race([
     working,
@@ -220,11 +182,6 @@ test("overlens crawl", async ({ context }) => {
       await target.route(pattern, (route) => route.abort());
   };
 
-  // Login runs on a pristine page, as a person would: the determinism
-  // treatments exist for screenshots, and freezing the clock during a live
-  // login makes freshly issued tokens look like they're from the future —
-  // OIDC iat/nbf validation then rejects the session. Cookies and
-  // localStorage live on the context, so the session survives the close.
   if (overlens.auth) {
     const login = await context.newPage();
     await overlens.auth(login);
@@ -234,8 +191,6 @@ test("overlens crawl", async ({ context }) => {
   let page = await context.newPage();
   await preparePage(page);
 
-  // The page may be wedged beyond recovery — replace it. Cookies and
-  // storage live on the context, so the session carries over.
   const replacePage = async () => {
     await page.close().catch(() => {});
     page = await context.newPage();
@@ -272,16 +227,12 @@ test("overlens crawl", async ({ context }) => {
     });
   };
 
-  // Entry pages keep their full href (query and all); every other page is
-  // origin + path.
   const entryOf = new Map(
     entries.map((u) => [u.pathname.replace(/\/$/, "") || "/", u.href]),
   );
   const seen = new Set<string>();
   const queue = [...entryOf.keys()];
-  // Captured page shapes, each pressed state listed as <shape>~<state>.
   const pages = new Set<string>();
-  // Valued presses already shot, per pass, across the whole crawl.
   const shotOf = new Map<Pass, Set<string>>();
 
   while (queue.length) {
@@ -290,10 +241,6 @@ test("overlens crawl", async ({ context }) => {
     seen.add(path);
     if (excluded(path)) continue;
     const pathShape = shape(path);
-    // `shape` declares these paths to be the same page, so a second instance
-    // has nothing to add: same screenshot, same links. Collapsing them is the
-    // whole point of shaping. A shape only counts as captured once a visit
-    // succeeds, so a page that fails still lets its siblings stand in.
     if (pages.has(pathShape)) continue;
     const url = entryOf.get(path) ?? `${entries[0].origin}${path}`;
     const presses = new Map<Pass, Press[]>();
@@ -324,13 +271,6 @@ test("overlens crawl", async ({ context }) => {
       continue;
     }
 
-    // Every pressed state starts from a fresh load and replays its press
-    // chain, so no state leaks into another — a press inside an opened drawer
-    // is shot as drawer~press. Each element is pressed once per pass: what a
-    // state reveals is only explored when no earlier state claimed it, and a
-    // valued press shot on one page is never pressed again on another — the
-    // same drawer opened from two pages is one state, filed under the page
-    // that reached it first.
     for (const [pass, roots] of presses) {
       const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
       const claimed = new Set<string>();

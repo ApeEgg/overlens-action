@@ -1,6 +1,4 @@
 #!/bin/sh
-# Crawls the fixture site with the engine end to end, laid out the way the
-# workflow lays out a consumer: config at the root, engine in .overlens.
 set -e
 cd "$(dirname "$0")"
 rm -rf .overlens && mkdir .overlens && cp -R ../crawler .overlens/crawler
