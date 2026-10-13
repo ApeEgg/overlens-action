@@ -289,7 +289,7 @@ jobs:
               --title "$TITLE" --body-file /tmp/body.md) || VPR=""
           fi
           {
-            echo "## Summary by Overlens"
+            echo "## This PR was visually scanned through [Overlens](https://overlens.korte.kim)"
             echo
             if [ "$CHANGED" -gt 0 ]; then
               printf '🎭 Visual differences detected — %s of all pages have diffs. ' "$PCT"
