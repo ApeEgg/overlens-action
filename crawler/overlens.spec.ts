@@ -137,15 +137,9 @@ const pressables = (page: Page) =>
       })
       .map((el) => {
         const nth = all.indexOf(el);
-        const path = (node: Element): string =>
-          node.parentElement
-            ? `${path(node.parentElement)}>${[...node.parentElement.children].indexOf(node)}`
-            : "";
-        return {
-          nth,
-          selector: `${press} >> nth=${nth}`,
-          group: `${path(el.parentElement!)}>${el.tagName}.${el.className}`,
-        };
+        const shape = (node: Element | null): string =>
+          node ? `${shape(node.parentElement)}>${node.tagName}.${node.className}` : "";
+        return { nth, selector: `${press} >> nth=${nth}`, group: shape(el) };
       });
   }, PRESS);
 
@@ -329,6 +323,7 @@ test("overlens crawl", async ({ context }) => {
       const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
       const claimed = new Set<number>();
       const exhausted = new Set<string>();
+      const openedBy = new Map<string, Set<string>>();
       const take = (found: Press[]) => {
         const taken = found.filter(({ nth }) => !claimed.has(nth));
         taken.forEach(({ nth }) => claimed.add(nth));
@@ -356,7 +351,11 @@ test("overlens crawl", async ({ context }) => {
             const names = menu ? before : [...before, name];
             const key = names.join("~");
             const suffix = names.map((part) => `~${part}`).join("");
-            if (!menu && shot.has(key)) exhausted.add(last.group);
+            const siblings = openedBy.get(last.group) ?? openedBy.set(last.group, new Set()).get(last.group)!;
+            if (!menu && siblings.has(key)) exhausted.add(last.group);
+            if (!menu) siblings.add(key);
+            if (!menu && shot.has(key))
+              console.info(`${pathShape}${suffix} ${pass.name} already shot`);
             if (!menu && !shot.has(key)) {
               await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
               shot.add(key);

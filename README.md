@@ -78,10 +78,10 @@ opened state reveals are pressed next and shot as `<page>~<name>~<nested>.png`.
   pages, give one snapshot, filed under the first page that reached it. Name
   dialogs by what they are: a dialog titled with data (a customer, an episode)
   is a new state for every value, so give it a fixed `aria-label` instead.
-- **Repeats stop early** — marked elements sharing a parent, tag and class
-  are a group (the rows of a list). Once one of them opens a state that was
-  already shot, the rest of the group isn't pressed, so a long list costs two
-  presses, not one per row.
+- **Repeats stop early** — marked elements with the same tag-and-class
+  ancestry are a group (the rows of a list). Once two of them open the same
+  state on a page, the rest of the group isn't pressed, so a long list costs
+  two presses, not one per row.
 - **Menus are a way in** — a `[role=menu]` or `[role=listbox]` a press opens
   isn't shot; its marked items are pressed and named as if they sat on the
   page, `<page>~<name>.png`.
