@@ -116,32 +116,7 @@ const settled = async (page: Page) => {
 
 const PRESS = '[data-overlens-press=""], [data-overlens-press="true"]';
 
-type Press = { nth: number; selector: string; group: string };
-
-type Opened = { name: string; menu: boolean };
-
-const pressables = (page: Page) =>
-  page.evaluate((press) => {
-    const all = [...document.querySelectorAll<HTMLElement>(press)];
-    return all
-      .filter((el) => {
-        const { left, right, width, height } = el.getBoundingClientRect();
-        return (
-          width &&
-          height &&
-          right > 0 &&
-          left < innerWidth &&
-          !el.closest("[inert]") &&
-          el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
-        );
-      })
-      .map((el) => {
-        const nth = all.indexOf(el);
-        const shape = (node: Element | null): string =>
-          node ? `${shape(node.parentElement)}>${node.tagName}.${node.className}` : "";
-        return { nth, selector: `${press} >> nth=${nth}`, group: shape(el) };
-      });
-  }, PRESS);
+type Press = { nth: number; selector: string; group: string; name: string };
 
 const slug = (text: string) =>
   text
@@ -150,56 +125,35 @@ const slug = (text: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 60);
 
-const topmost = (page: Page) =>
-  page.evaluate(() => {
-    const top = [
-      ...document.querySelectorAll<HTMLElement>(
-        "dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true], [role=menu], [role=listbox]",
-      ),
-    ]
-      .filter((el) => {
-        const { width, height } = el.getBoundingClientRect();
-        return (
-          width &&
-          height &&
-          !el.closest("[inert]") &&
-          el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
-        );
-      })
-      .at(-1);
-    if (!top) return null;
-    const name = (
-      top.getAttribute("aria-label") ||
-      (top.getAttribute("aria-labelledby") ?? "")
-        .split(/\s+/)
-        .map((id) => document.getElementById(id)?.textContent ?? "")
-        .join(" ")
-        .trim() ||
-      top.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]")?.textContent ||
-      ""
-    ).trim();
-    return { name, menu: ["menu", "listbox"].includes(top.getAttribute("role") ?? "") };
-  });
-
-const pressName = (page: Page, nth: number) =>
-  page.evaluate(
-    ({ press, nth }) => {
-      const el = document.querySelectorAll(press)[nth];
-      return el?.getAttribute("aria-label") || el?.textContent?.trim() || "";
-    },
-    { press: PRESS, nth },
-  );
-
-const opened = async (page: Page, press: Press, prior: Awaited<ReturnType<typeof topmost>>) => {
-  const top = await topmost(page);
-  const fresh = !!top && (!prior || top.name !== prior.name || top.menu !== prior.menu);
-  return {
-    name:
-      slug((fresh && top.name) || (await pressName(page, press.nth))) ||
-      String(press.nth + 1),
-    menu: fresh && top.menu,
-  } satisfies Opened;
-};
+const pressables = async (page: Page): Promise<Press[]> =>
+  (
+    await page.evaluate((press) => {
+      const all = [...document.querySelectorAll<HTMLElement>(press)];
+      return all
+        .filter((el) => {
+          const { left, right, width, height } = el.getBoundingClientRect();
+          return (
+            width &&
+            height &&
+            right > 0 &&
+            left < innerWidth &&
+            !el.closest("[inert]") &&
+            el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+          );
+        })
+        .map((el) => {
+          const nth = all.indexOf(el);
+          const shape = (node: Element | null): string =>
+            node ? `${shape(node.parentElement)}>${node.tagName}.${node.className}` : "";
+          return {
+            nth,
+            selector: `${press} >> nth=${nth}`,
+            group: shape(el),
+            label: el.getAttribute("aria-label") || el.textContent?.trim() || "",
+          };
+        });
+    }, PRESS)
+  ).map(({ label, ...press }) => ({ ...press, name: slug(label) || String(press.nth + 1) }));
 
 const PAGE_DEADLINE = 90_000;
 const withDeadline = <T>(work: () => Promise<T>) => {
@@ -281,7 +235,6 @@ test("overlens crawl", async ({ context }) => {
   const seen = new Set<string>();
   const queue = [...entryOf.keys()];
   const pages = new Set<string>();
-  const shotOf = new Map<Pass, Set<string>>();
 
   while (queue.length) {
     const path = queue.shift()!.replace(/\/$/, "") || "/";
@@ -320,57 +273,51 @@ test("overlens crawl", async ({ context }) => {
     }
 
     for (const [pass, roots] of presses) {
-      const shot = shotOf.get(pass) ?? shotOf.set(pass, new Set()).get(pass)!;
       const claimed = new Set<number>();
-      const exhausted = new Set<string>();
-      const openedBy = new Map<string, Set<string>>();
+      const shot = new Set<string>();
+      const files = new Set<string>();
       const take = (found: Press[]) => {
         const taken = found.filter(({ nth }) => !claimed.has(nth));
         taken.forEach(({ nth }) => claimed.add(nth));
         return taken;
       };
       const chains = take(roots)
-        .map((press) => ({ presses: [press], names: [] as string[] }))
+        .map((press) => ({ presses: [press], suffix: "", groups: [] as string[] }))
         .reverse();
       while (chains.length) {
-        const { presses: chain, names: before } = chains.pop()!;
+        const { presses: chain, suffix: before, groups: above } = chains.pop()!;
         const last = chain.at(-1)!;
-        if (exhausted.has(last.group)) continue;
+        const groups = [...above, last.group];
+        const key = groups.join("~");
+        const named = `${before}~${last.name}`;
+        const suffix = files.has(named) ? `${named}-${last.nth + 1}` : named;
+        if (shot.has(key)) {
+          console.info(`${pathShape}${suffix} ${pass.name} already shot by its group`);
+          continue;
+        }
         const pressed = Date.now();
         try {
           await withDeadline(async () => {
             await load(url);
             await frame(pass);
-            let prior: Awaited<ReturnType<typeof topmost>> = null;
             for (const { selector } of chain) {
-              prior = await topmost(page);
               await page.locator(selector).filter({ visible: true }).first().click();
               await settled(page);
             }
-            const { name, menu } = await opened(page, last, prior);
-            const names = menu ? before : [...before, name];
-            const key = names.join("~");
-            const suffix = names.map((part) => `~${part}`).join("");
-            const siblings = openedBy.get(last.group) ?? openedBy.set(last.group, new Set()).get(last.group)!;
-            if (!menu && siblings.has(key)) exhausted.add(last.group);
-            if (!menu) siblings.add(key);
-            if (!menu && shot.has(key))
-              console.info(`${pathShape}${suffix} ${pass.name} already shot`);
-            if (!menu && !shot.has(key)) {
-              await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
-              shot.add(key);
-              pages.add(`${pathShape}${suffix}`);
-              console.info(`${pathShape}${suffix} ${pass.name} ${Date.now() - pressed}ms`);
-            }
+            await shoot(`${pass.name}/${fileBase(pathShape)}${suffix}`);
+            shot.add(key);
+            files.add(suffix);
+            pages.add(`${pathShape}${suffix}`);
+            console.info(`${pathShape}${suffix} ${pass.name} ${Date.now() - pressed}ms`);
             chains.push(
               ...take(await pressables(page))
-                .map((press) => ({ presses: [...chain, press], names }))
+                .map((press) => ({ presses: [...chain, press], suffix, groups }))
                 .reverse(),
             );
           });
         } catch (error) {
           console.info(
-            `${pathShape}~${last.nth + 1} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
+            `${pathShape}${suffix} ${pass.name} skipped (${String((error as Error)?.message || error).split("\n")[0]})`,
           );
           await replacePage();
         }

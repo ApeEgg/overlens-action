@@ -64,27 +64,24 @@ value, `"false"` included, isn't a press.
 
 After a page's own passes, each pass (viewport and theme) presses every
 marked element on screen, waits until running animations finish and the page
-settles, and works out what the press opened: the topmost visible
-`dialog[open]`, `[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]`,
-`[role=menu]` or `[role=listbox]` that wasn't on top before the press. The
-state is named after that element's accessible name — `aria-label`, else the
-text its `aria-labelledby` points to, else its first heading — and shot as
-`<viewport>-<theme>/<page>~<name>.png`. When nothing new opened, the press's
-own label (`aria-label`, else its text) names the state. Marked elements the
-opened state reveals are pressed next and shot as `<page>~<name>~<nested>.png`.
+settles, and shoots whatever the press produced — a drawer, a menu, a modal,
+revealed content, anything. The crawl never looks at what opened. The state
+is named after the pressed element's own label (`aria-label`, else its text)
+and shot as `<viewport>-<theme>/<page>~<name>.png`. Marked elements the
+pressed state shows are pressed next and shot as `<page>~<name>~<nested>.png`.
+When two presses on a page share a name, the later one gets its place among
+the page's presses appended, `<page>~<name>-<n>.png`.
 
-- **Same state, one shot** — a state is shot once per pass across the whole
-  crawl. Ten rows opening the same drawer, or one drawer opened from several
-  pages, give one snapshot, filed under the first page that reached it. Name
-  dialogs by what they are: a dialog titled with data (a customer, an episode)
-  is a new state for every value, so give it a fixed `aria-label` instead.
-- **Repeats stop early** — marked elements with the same tag-and-class
-  ancestry are a group (the rows of a list). Once two of them open the same
-  state on a page, the rest of the group isn't pressed, so a long list costs
-  two presses, not one per row.
-- **Menus are a way in** — a `[role=menu]` or `[role=listbox]` a press opens
-  isn't shot; its marked items are pressed and named as if they sat on the
-  page, `<page>~<name>.png`.
+- **One shot per group** — marked elements with the same tag-and-class
+  ancestry are a group (the rows of a list). A state is identified by its page
+  and the group of the press that produced it, so only the first of a group is
+  pressed and shot; ten rows opening a drawer titled with their own record
+  give one snapshot, named after the first row. The flip side: siblings that
+  share ancestry but open different things (tabs, a toolbar of plain
+  buttons) are one group too, so give each a class of its own when every one
+  should be shot.
+- **Per page** — the same drawer reached from several pages is shot under
+  each of them.
 - **Pressed once** — each marked element is recorded by its place among the
   page's presses, so nothing is pressed twice within a page's crawl and a
   button still visible behind its own drawer isn't explored again.
@@ -92,7 +89,7 @@ opened state reveals are pressed next and shot as `<page>~<name>~<nested>.png`.
   its press chain. State the press persists (localStorage, the server) does
   carry over, so only mark presses that open things.
 - **Time** — each press is a full page load, counted against
-  `timeoutMinutes`, including presses whose state was already shot.
+  `timeoutMinutes`; the rest of a group is never pressed, so it costs nothing.
 
 ## Masks
 
@@ -112,8 +109,8 @@ selectors on top; it never replaces the attribute.
 ## Developing
 
 `fixture/run.sh` crawls a small fixture site — a drawer with a nested press
-inside it, a menu whose item opens a drawer, three rows opening the same
-dialog, a masked element, and a second page opening a dialog the first page
-already shot — with the engine end to end and lists the snapshots it
+inside it, a menu whose item opens a drawer, three rows opening a drawer
+titled with their own record, a masked element, and a second page opening a
+drawer the first page also opens — with the engine end to end and lists the snapshots it
 took into `fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
 chromium locally.

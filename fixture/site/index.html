@@ -17,8 +17,8 @@
     <header>
       <a href="/settings">Settings</a>
       <button data-overlens-press onclick="slide(menu)">Menu</button>
-      <button data-overlens-press onclick="banner.hidden = !banner.hidden">Banner</button>
-      <button data-overlens-press onclick="actions.hidden = !actions.hidden">Actions</button>
+      <button class="banner" data-overlens-press onclick="banner.hidden = !banner.hidden">Banner</button>
+      <button class="actions" data-overlens-press onclick="actions.hidden = !actions.hidden">Actions</button>
     </header>
     <nav id="actions" role="menu" aria-label="Actions" hidden>
       <button role="menuitem" data-overlens-press onclick="actions.hidden = true; slide(share)">Share</button>
@@ -38,7 +38,7 @@
       <section id="details" hidden>Nested details inside the drawer</section>
     </aside>
     <aside id="share" role="dialog" aria-labelledby="share-title" hidden><b id="share-title">Share</b></aside>
-    <aside id="row" role="dialog" aria-label="Row details" hidden><b id="row-title"></b></aside>
+    <aside id="row" role="dialog" hidden><b id="row-title"></b></aside>
     <script>
       const slide = (el) => {
         el.hidden = false;
