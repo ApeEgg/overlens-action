@@ -133,9 +133,10 @@ const settled = async (page: Page) => {
 // a drawer, a menu, a dialog. Only those on screen count:
 // rendered, not inert, not parked beside the viewport (a closed off-canvas
 // drawer). An element's identity is its attribute value, so equal values are
-// one press and the value names the snapshot; a bare attribute is identified
-// by its place among the page's elements carrying the same attribute — the
-// page's 3rd press is <page>~3, whatever markup surrounds it.
+// one press and the value names the snapshot; a bare attribute — or "true",
+// which is how React renders a bare JSX data-* attribute — is identified by
+// its place among the page's presses: the page's 3rd press is <page>~3,
+// whatever markup surrounds it.
 type Press = {
   id: string;
   name: string;
@@ -159,7 +160,7 @@ const pressables = (page: Page) =>
         !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
       )
         continue;
-      const value = el.dataset.overlensPress;
+      const value = el.dataset.overlensPress?.replace(/^true$/, "");
       const nth = [...document.querySelectorAll("[data-overlens-press]")].indexOf(el);
       const id = value || String(nth + 1);
       if (!found.has(id))

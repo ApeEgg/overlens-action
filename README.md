@@ -67,7 +67,9 @@ report and diff.
 
 - **Identity** — the attribute value names the state and identifies the
   element, so elements sharing a value are one press. A bare
-  `data-overlens-press` is identified by its place among the page's presses:
+  `data-overlens-press` — or `data-overlens-press="true"`, which is what React
+  renders for a bare JSX `<button data-overlens-press>` — is identified by its
+  place among the page's presses:
   the 3rd is `<page>~3.png`, recorded as pressed so it's never pressed again.
   Positions shift when the page's data adds or removes presses before it.
 - **Once per pass** — no element is pressed twice within a page's crawl, so a
