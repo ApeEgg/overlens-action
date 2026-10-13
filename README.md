@@ -84,10 +84,25 @@ report and diff.
 - **Time** — each state is a full page load, counted against
   `timeoutMinutes`.
 
+## Masks
+
+Content that changes on every render — a clock, an avatar, a live counter —
+is covered with a solid box in every screenshot when its element carries
+`data-overlens-mask`:
+
+```html
+<time data-overlens-mask>12:04</time>
+```
+
+The attribute counts when it's bare, empty or `"true"` — React renders a bare
+JSX `<time data-overlens-mask>` as `data-overlens-mask="true"`. Any other value,
+`"false"` included, leaves the element unmasked. The config's `mask` adds CSS
+selectors on top; it never replaces the attribute.
+
 ## Developing
 
 `fixture/run.sh` crawls a small fixture site — a drawer with a nested press
-inside it, a dropdown menu whose item opens a drawer, and a second page sharing
-a press with the first — with the engine end to end and lists the snapshots it
+inside it, a dropdown menu whose item opens a drawer, a masked element, and a
+second page sharing a press with the first — with the engine end to end and lists the snapshots it
 took into `fixture/.overlens/crawler/overlens-output`. It needs bun and Playwright's
 chromium locally.

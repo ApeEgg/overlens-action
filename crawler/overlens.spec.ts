@@ -12,7 +12,13 @@ test.describe.configure({ retries: 0 });
 const shape =
   overlens.shape ??
   ((path: string) => path.replace(/\/(?=[^/]*\d)[^/]{8,}/g, "/[id]"));
-const mask = overlens.mask ?? ["[data-apply-playwright-mask]"];
+// Elements carrying data-overlens-mask are always masked — bare, empty or
+// "true" (a bare JSX data-* attribute renders as "true"); config.mask adds
+// selectors on top.
+const mask = [
+  '[data-overlens-mask=""], [data-overlens-mask="true"]',
+  ...(overlens.mask ?? []),
+];
 type Pass = (typeof overlens.passes)[number];
 
 const clock = (page: Page, timestamp: number) =>
